@@ -1,9 +1,12 @@
 """
 Short Authentication String (SAS) generation.
 Creates human-verifiable fingerprints for MITM detection.
+
+SECURITY FIX: Added missing hmac import for constant-time comparison
 """
 
 import hashlib
+import hmac  # SECURITY FIX: Added missing import
 
 # Diceware-style word list (2048 words for 11 bits each)
 # Using simple, memorable words (shortened list for demo)
@@ -110,7 +113,7 @@ class SASGenerator:
 ║  Decimal: {sas_dict['decimal']:<50}║
 ║                                                          ║
 ╠══════════════════════════════════════════════════════════╣
-║  ⚠  Compare with peer - must match exactly!             ║
+║  ⚠️   Compare with peer - must match exactly!             ║
 ╚══════════════════════════════════════════════════════════╝
 """
         return output
@@ -118,7 +121,7 @@ class SASGenerator:
     @staticmethod
     def verify_sas_match(sas1_raw, sas2_raw):
         """
-        Verify two SAS values match.
+        Verify two SAS values match using constant-time comparison.
         
         Args:
             sas1_raw: Raw SAS bytes from first party
@@ -127,7 +130,8 @@ class SASGenerator:
         Returns:
             True if match, False otherwise
         """
-        # Constant-time comparison
+        # SECURITY FIX: Now hmac is properly imported at top of file
+        # Constant-time comparison to prevent timing attacks
         return hmac.compare_digest(sas1_raw, sas2_raw)
     
     @staticmethod

@@ -1,0 +1,8 @@
+# Core cryptography
+cryptography>=41.0.0
+
+# SPAKE2 PAKE implementation
+spake2>=0.8
+
+# Optional: QR code support
+qrcode[pil]>=7.4.2
