@@ -85,20 +85,6 @@ core/
 - **SAS**: 40 bits (6 words) or 64 bits (8 digits)
 - **Nonces**: 12-byte counter (per-message unique)
 
-## Development Status
-
-**Phase 3 Complete:**
-- ✅ Protocol layer (wire-format)
-- ✅ SPAKE2 integration
-- ✅ Ephemeral DH
-- ✅ AEAD encryption
-- ✅ SAS verification
-
-**Next:**
-- Integrate with existing sender.py/receiver.py
-- Add rate limiting
-- GUI development (Android/Desktop)
-
 ## License
 
 Open Source - Educational/Research Use
