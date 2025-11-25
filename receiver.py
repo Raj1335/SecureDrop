@@ -1,10 +1,7 @@
 """
 SecureDrop Receiver - SPAKE2 + X25519 + ChaCha20-Poly1305
 Protocol Version 1.0
-SECURITY FIXES:
-- Path traversal protection
-- Rate limiting for brute-force prevention
-- DoS protection via payload size validation
+UPDATED: Multi-file transfer support
 """
 
 import socket
@@ -15,7 +12,6 @@ from pathlib import Path
 import time
 import sys
 
-# Import protocol modules
 sys.path.append(os.path.dirname(__file__))
 from core.protocol import (
     ProtocolMessage, MessageType, RoleID, ErrorCode,
@@ -47,10 +43,10 @@ class SecureReceiver:
         self.aead_cipher = None
         self.sas = None
         
-        # Rate limiting - NOW ACTUALLY USED
-        self.failed_attempts = {}  # IP -> (count, last_attempt_time)
+        # Rate limiting
+        self.failed_attempts = {}
         self.max_attempts = 3
-        self.ban_duration = 300  # 5 minutes
+        self.ban_duration = 300
     
     def get_local_ip(self):
         """Get local IP address"""
@@ -64,13 +60,11 @@ class SecureReceiver:
             return "127.0.0.1"
     
     def is_ip_banned(self, ip):
-        """Check if IP is currently banned due to failed attempts"""
+        """Check if IP is currently banned"""
         if ip not in self.failed_attempts:
             return False
         
         count, last_attempt = self.failed_attempts[ip]
-        
-        # Check if ban has expired
         if time.time() - last_attempt > self.ban_duration:
             del self.failed_attempts[ip]
             return False
@@ -78,12 +72,11 @@ class SecureReceiver:
         return count >= self.max_attempts
     
     def record_failed_attempt(self, ip):
-        """Record a failed handshake attempt for rate limiting"""
+        """Record a failed handshake attempt"""
         current_time = time.time()
         
         if ip in self.failed_attempts:
             count, last_attempt = self.failed_attempts[ip]
-            # Reset count if last attempt was more than ban_duration ago
             if current_time - last_attempt > self.ban_duration:
                 count = 0
             self.failed_attempts[ip] = (count + 1, current_time)
@@ -92,33 +85,19 @@ class SecureReceiver:
         
         count = self.failed_attempts[ip][0]
         if count >= self.max_attempts:
-            remaining_ban = self.ban_duration - (current_time - self.failed_attempts[ip][1])
-            print(f"⚠️  IP {ip} banned for {remaining_ban:.0f} more seconds")
+            remaining = self.ban_duration - (current_time - self.failed_attempts[ip][1])
+            print(f"⚠️  IP {ip} banned for {remaining:.0f} more seconds")
     
     def sanitize_filename(self, filename):
-        """
-        SECURITY FIX: Sanitize filename to prevent path traversal attacks.
-        
-        Args:
-            filename: Untrusted filename from network
-            
-        Returns:
-            Safe filename (just the base name)
-            
-        Raises:
-            ValueError if filename is invalid
-        """
+        """Sanitize filename to prevent path traversal"""
         if not filename or len(filename) > MAX_FILENAME_LENGTH:
             raise ValueError(f"Invalid filename length: {len(filename)}")
         
-        # Extract just the base filename (removes any path components)
         safe_name = os.path.basename(filename)
         
-        # Additional validation: ensure no path separators remain
         if '/' in safe_name or '\\' in safe_name or '..' in safe_name:
             raise ValueError(f"Invalid filename contains path separators: {filename}")
         
-        # Ensure filename is not empty after sanitization
         if not safe_name or safe_name in ('.', '..'):
             raise ValueError(f"Invalid filename after sanitization: {filename}")
         
@@ -130,21 +109,14 @@ class SecureReceiver:
         while len(data) < n:
             chunk = sock.recv(n - len(data))
             if not chunk:
-                raise ConnectionError("Connection closed prematurely")
+                raise ConnectionError(f"Connection closed after {len(data)}/{n} bytes")
             data += chunk
         return data
     
     def handshake(self, conn, client_ip):
-        """
-        Perform full cryptographic handshake with rate limiting.
-        Returns True if successful, False otherwise.
-        
-        Args:
-            conn: Socket connection
-            client_ip: Client IP address for rate limiting
-        """
+        """Perform full cryptographic handshake with rate limiting"""
         try:
-            # SECURITY FIX: Check if IP is banned before proceeding
+            # Check if IP is banned
             if self.is_ip_banned(client_ip):
                 print(f"✗ Connection rejected - IP {client_ip} is temporarily banned")
                 error_msg = ProtocolMessage.pack_error(
@@ -184,7 +156,7 @@ class SecureReceiver:
             print("[3/7] Performing SPAKE2 PAKE...")
             spake = SPAKE2Exchange(self.pairing_code, side="B")
 
-            # Receive PAKE_INIT - SECURITY FIX: Validate payload size BEFORE reading
+            # Receive PAKE_INIT
             pake_init_header = self.recv_exact(conn, 5)
             msg_type, pake_major, pake_minor, payload_len = struct.unpack('!BBBH', pake_init_header)
             
@@ -193,9 +165,8 @@ class SecureReceiver:
                 self.record_failed_attempt(client_ip)
                 return False
             
-            # SECURITY FIX: Validate payload size against maximum
             if payload_len > MAX_PAKE_PAYLOAD:
-                print(f"✗ PAKE payload too large: {payload_len} (max: {MAX_PAKE_PAYLOAD})")
+                print(f"✗ PAKE payload too large: {payload_len}")
                 error_msg = ProtocolMessage.pack_error(
                     PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
                     ErrorCode.PROTOCOL_MISMATCH
@@ -214,12 +185,12 @@ class SecureReceiver:
             )
             conn.send(pake_reply)
 
-            # Derive K_pake - this will fail if wrong pairing code
+            # Derive K_pake
             try:
                 k_pake = spake.finish(pake_payload)
                 print(f"✓ SPAKE2 complete (K_pake derived)")
             except Exception as e:
-                print(f"✗ SPAKE2 failed - likely wrong pairing code: {e}")
+                print(f"✗ SPAKE2 failed - wrong pairing code: {e}")
                 error_msg = ProtocolMessage.pack_error(
                     PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
                     ErrorCode.PAKE_FAIL
@@ -270,13 +241,13 @@ class SecureReceiver:
             print("="*60)
             
             # SAS Verification
-            print("\n🔍 SAS VERIFICATION REQUIRED!")
+            print("\n🔐 SAS VERIFICATION REQUIRED!")
             print("Compare the SAS above with the sender's display.")
             print("Do they match exactly? (yes/no): ")
             user_input = input().strip().lower()
             
             if user_input not in ['yes', 'y']:
-                print("❌ Transfer ABORTED - SAS mismatch!")
+                print("⛔ Transfer ABORTED - SAS mismatch!")
                 error_msg = ProtocolMessage.pack_error(
                     PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
                     ErrorCode.PAKE_FAIL
@@ -330,7 +301,7 @@ class SecureReceiver:
             # Initialize AEAD cipher
             self.aead_cipher = AEADCipher(self.session_keys['aead_key'])
             
-            # Clear failed attempts on successful handshake
+            # Clear failed attempts on success
             if client_ip in self.failed_attempts:
                 del self.failed_attempts[client_ip]
             
@@ -343,154 +314,215 @@ class SecureReceiver:
             traceback.print_exc()
             return False
     
-    def receive_file(self, conn):
-        """Receive encrypted file over AEAD channel"""
+    def receive_files(self, conn):
+        """Receive multiple files over single connection"""
         try:
-            # Receive FILE_META using ProtocolMessage method
-            print("\n[*] Receiving file metadata...")
+            # Receive FILE_LIST header
+            print("\n[*] Receiving file list...")
+            list_header = self.recv_exact(conn, 7)
+            msg_type, major, minor, file_count = struct.unpack('!BBBI', list_header)
             
-            # Read FILE_META header first
-            meta_header = self.recv_exact(conn, 5)
-            msg_type, major, minor, filename_len = struct.unpack('!BBBH', meta_header)
-            
-            if msg_type != MessageType.FILE_META:
-                print(f"✗ Expected FILE_META, got {msg_type}")
+            if msg_type != MessageType.FILE_LIST:
+                print(f"✗ Expected FILE_LIST, got {msg_type}")
                 return False
             
-            # SECURITY FIX: Validate filename length before reading
-            if filename_len > MAX_FILENAME_LENGTH:
-                print(f"✗ Filename too long: {filename_len} (max: {MAX_FILENAME_LENGTH})")
-                return False
+            # Receive file entries
+            file_entries = []
+            for _ in range(file_count):
+                # Read filename length
+                name_len_data = self.recv_exact(conn, 2)
+                name_len = struct.unpack('!H', name_len_data)[0]
+                
+                if name_len > MAX_FILENAME_LENGTH:
+                    print(f"✗ Filename too long: {name_len}")
+                    return False
+                
+                # Read filename and size
+                name_bytes = self.recv_exact(conn, name_len)
+                size_data = self.recv_exact(conn, 8)
+                
+                filename = name_bytes.decode('utf-8')
+                size = struct.unpack('!Q', size_data)[0]
+                file_entries.append((filename, size))
             
-            # Read the rest of FILE_META
-            filename_bytes = self.recv_exact(conn, filename_len)
-            file_size_bytes = self.recv_exact(conn, 8)
+            total_files = len(file_entries)
+            total_size = sum(s for _, s in file_entries)
             
-            filename_raw = filename_bytes.decode('utf-8')
-            file_size = struct.unpack('!Q', file_size_bytes)[0]
+            print(f"📥 Receiving {total_files} files")
+            print(f"📊 Total size: {total_size / (1024*1024):.2f} MB\n")
             
-            # SECURITY FIX: Sanitize filename to prevent path traversal
-            try:
-                filename = self.sanitize_filename(filename_raw)
-                if filename != filename_raw:
-                    print(f"⚠️  Filename sanitized: '{filename_raw}' -> '{filename}'")
-            except ValueError as e:
-                print(f"✗ Invalid filename rejected: {e}")
-                return False
+            # Sanitize all filenames
+            sanitized_entries = []
+            for filename, size in file_entries:
+                try:
+                    safe_name = self.sanitize_filename(filename)
+                    sanitized_entries.append((safe_name, size))
+                    if safe_name != filename:
+                        print(f"⚠️  Sanitized: '{filename}' → '{safe_name}'")
+                except ValueError as e:
+                    print(f"✗ Invalid filename rejected: {e}")
+                    return False
             
-            print(f"✓ File: {filename}")
-            print(f"✓ Size: {file_size / (1024*1024):.2f} MB")
+            # Send FILE_LIST_ACK
+            ack = ProtocolMessage.pack_file_list_ack(
+                PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR
+            )
+            conn.send(ack)
             
-            # Receive encrypted chunks
-            save_path = self.save_dir / filename
-            received = 0
-            sequence = 0
-            file_hasher = hashlib.sha256()
-            chunk_count = 0
+            # Receive each file
+            success_count = 0
+            overall_start = time.time()
             
-            print(f"\n📥 Receiving... 0%", end='', flush=True)
-            start_time = time.time()
-            
-            with open(save_path, 'wb') as f:
-                while received < file_size:
-                    sequence += 1
-                    chunk_count += 1
+            for idx, (filename, file_size) in enumerate(sanitized_entries):
+                print(f"\n{'─'*60}")
+                print(f"[{idx+1}/{total_files}] {filename}")
+                print(f"{'─'*60}")
+                
+                if self._receive_single_file(conn, filename, file_size):
+                    success_count += 1
+                else:
+                    print(f"✗ Failed to receive {filename}")
+                    break
+                
+                # Send NEXT_FILE signal (except after last)
+                if idx < total_files - 1:
+                    # Reset AEAD counter for next file
+                    self.aead_cipher.reset_counter()
                     
-                    # Receive FILE_CHUNK header
-                    try:
-                        chunk_header = self.recv_exact(conn, 13)
-                    except ConnectionError:
-                        # Check if we received the entire file
-                        if received >= file_size:
-                            break
-                        else:
-                            raise
-                    
-                    msg_type, major, minor, seq, ct_len = struct.unpack('!BBBQH', chunk_header)
-                    
-                    if msg_type != MessageType.FILE_CHUNK:
-                        print(f"✗ Expected FILE_CHUNK, got {msg_type}")
-                        return False
-                    
-                    # SECURITY FIX: Validate chunk size against protocol maximum
-                    if ct_len > MAX_CHUNK_SIZE or ct_len == 0:
-                        print(f"✗ Invalid chunk size: {ct_len} (max: {MAX_CHUNK_SIZE})")
-                        return False
-                    
-                    # Receive ciphertext
-                    ciphertext = self.recv_exact(conn, ct_len)
-                    
-                    # Decrypt with AEAD
-                    nonce = self.aead_cipher.make_nonce(sequence)
-                    ad = create_associated_data(
-                        MessageType.FILE_CHUNK,
+                    next_msg = ProtocolMessage.pack_next_file(
                         PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
-                        sequence, filename
+                        idx + 1
                     )
-                    
-                    try:
-                        plaintext = self.aead_cipher.decrypt(nonce, ciphertext, ad)
-                        f.write(plaintext)
-                        file_hasher.update(plaintext)
-                        received += len(plaintext)
-                        
-                        progress = (received / file_size) * 100
-                        elapsed = time.time() - start_time
-                        speed = (received / (1024*1024)) / elapsed if elapsed > 0 else 0
-                        print(f"\r📥 Receiving... {progress:.1f}% | Speed: {speed:.2f} MB/s | Chunks: {chunk_count}", end='', flush=True)
-                        
-                    except Exception as e:
-                        print(f"\n✗ AEAD decrypt failed for chunk {sequence}: {e}")
-                        # SECURITY FIX: Clean up partial file on decryption failure
-                        if save_path.exists():
-                            os.remove(save_path)
-                            print(f"✓ Cleaned up partial file")
-                        return False
+                    conn.send(next_msg)
             
-            print(f"\n\n✓ File received ({chunk_count} chunks)")
+            # Send final result
+            all_success = (success_count == total_files)
+            result_msg = ProtocolMessage.pack_transfer_result(
+                PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
+                all_success
+            )
+            conn.send(result_msg)
             
-            # Receive FILE_END
-            file_end_data = self.recv_exact(conn, 43)
-            _, _, final_seq, sender_hash = ProtocolMessage.unpack_file_end(file_end_data)
+            overall_elapsed = time.time() - overall_start
+            overall_speed = (total_size / overall_elapsed) / (1024*1024) if overall_elapsed > 0 else 0
             
-            # Verify file integrity (use constant-time comparison)
-            calculated_hash = file_hasher.digest()
-            
-            print("\n" + "="*60)
-            import hmac
-            if hmac.compare_digest(calculated_hash, sender_hash):
-                print("✅ Transfer SUCCESSFUL")
-                print(f"✅ File saved: {save_path.absolute()}")
-                print(f"✅ Total chunks: {chunk_count}")
-                
-                # Send success
-                result_msg = ProtocolMessage.pack_transfer_result(
-                    PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
-                    True
-                )
-                conn.send(result_msg)
+            print(f"\n{'='*60}")
+            if all_success:
+                print(f"✅ ALL FILES RECEIVED SUCCESSFULLY")
+                print(f"✓ Files received: {success_count}/{total_files}")
+                print(f"✓ Total size: {total_size / (1024*1024):.2f} MB")
+                print(f"✓ Total time: {overall_elapsed:.2f} seconds")
+                print(f"✓ Average speed: {overall_speed:.2f} MB/s")
             else:
-                print("❌ FAILED - Hash mismatch")
-                print(f"Expected: {sender_hash.hex()}")
-                print(f"Got: {calculated_hash.hex()}")
-                if save_path.exists():
-                    os.remove(save_path)
-                    print(f"✓ Cleaned up corrupted file")
-                
-                # Send failure
-                result_msg = ProtocolMessage.pack_transfer_result(
-                    PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
-                    False
-                )
-                conn.send(result_msg)
-            print("="*60 + "\n")
+                print(f"⚠️  PARTIAL TRANSFER")
+                print(f"✓ Files received: {success_count}/{total_files}")
+            print(f"{'='*60}\n")
             
-            return hmac.compare_digest(calculated_hash, sender_hash)
+            return all_success
             
         except Exception as e:
-            print(f"\n✗ File transfer failed: {e}")
+            print(f"\n✗ Transfer failed: {e}")
             import traceback
             traceback.print_exc()
+            return False
+    
+    def _receive_single_file(self, conn, filename, file_size):
+        """Receive single file over existing connection"""
+        # Receive FILE_META
+        meta_header = self.recv_exact(conn, 5)
+        msg_type, major, minor, filename_len = struct.unpack('!BBBH', meta_header)
+        
+        if msg_type != MessageType.FILE_META:
+            print(f"✗ Expected FILE_META, got {msg_type}")
+            return False
+        
+        if filename_len > MAX_FILENAME_LENGTH:
+            print(f"✗ Filename too long: {filename_len}")
+            return False
+        
+        # Read the rest of FILE_META
+        filename_bytes = self.recv_exact(conn, filename_len)
+        file_size_bytes = self.recv_exact(conn, 8)
+        
+        # Verify filename matches what we expect
+        received_filename = filename_bytes.decode('utf-8')
+        received_size = struct.unpack('!Q', file_size_bytes)[0]
+        
+        # Save file
+        save_path = self.save_dir / filename
+        received = 0
+        sequence = 0
+        file_hasher = hashlib.sha256()
+        
+        print(f"📥 Receiving... 0%", end='', flush=True)
+        
+        with open(save_path, 'wb') as f:
+            while received < file_size:
+                sequence += 1
+                
+                # Receive chunk header
+                try:
+                    chunk_header = self.recv_exact(conn, 13)
+                except ConnectionError:
+                    if received >= file_size:
+                        break
+                    else:
+                        raise
+                
+                msg_type, major, minor, seq, ct_len = struct.unpack('!BBBQH', chunk_header)
+                
+                if msg_type != MessageType.FILE_CHUNK:
+                    print(f"✗ Expected FILE_CHUNK, got {msg_type}")
+                    if save_path.exists():
+                        os.remove(save_path)
+                    return False
+                
+                if ct_len > MAX_CHUNK_SIZE or ct_len == 0:
+                    print(f"✗ Invalid chunk size: {ct_len}")
+                    if save_path.exists():
+                        os.remove(save_path)
+                    return False
+                
+                # Receive ciphertext
+                ciphertext = self.recv_exact(conn, ct_len)
+                
+                # Decrypt with AEAD
+                nonce = self.aead_cipher.make_nonce(sequence)
+                ad = create_associated_data(
+                    MessageType.FILE_CHUNK,
+                    PROTOCOL_VERSION_MAJOR, PROTOCOL_VERSION_MINOR,
+                    sequence, filename
+                )
+                
+                try:
+                    plaintext = self.aead_cipher.decrypt(nonce, ciphertext, ad)
+                    f.write(plaintext)
+                    file_hasher.update(plaintext)
+                    received += len(plaintext)
+                    
+                    progress = (received / file_size) * 100
+                    print(f"\r📥 Receiving... {progress:.1f}%", end='', flush=True)
+                    
+                except Exception as e:
+                    print(f"\n✗ AEAD decrypt failed for chunk {sequence}: {e}")
+                    if save_path.exists():
+                        os.remove(save_path)
+                    return False
+        
+        # Verify hash
+        file_end_data = self.recv_exact(conn, 43)
+        _, _, final_seq, sender_hash = ProtocolMessage.unpack_file_end(file_end_data)
+        
+        calculated_hash = file_hasher.digest()
+        
+        import hmac
+        if hmac.compare_digest(calculated_hash, sender_hash):
+            print(f"\r✓ Received and verified" + " "*30)
+            return True
+        else:
+            print(f"\n✗ Hash mismatch")
+            if save_path.exists():
+                os.remove(save_path)
             return False
     
     def start(self):
@@ -499,16 +531,16 @@ class SecureReceiver:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(('0.0.0.0', self.port))
         server.listen(1)
-        server.settimeout(300)  # 5 minute timeout
+        server.settimeout(300)
         
         local_ip = self.get_local_ip()
         
         print("\n" + "="*60)
-        print("SecureDrop Receiver v1.0 [SPAKE2 + X25519 + ChaCha20]")
+        print("SecureDrop Receiver v1.0 [Multi-File Transfer]")
         print("="*60)
-        print(f"\n🔐 PAIRING CODE: {self.pairing_code}")
+        print(f"\n🔑 PAIRING CODE: {self.pairing_code}")
         print(f"\n📱 Sender command:")
-        print(f"   python sender.py {local_ip} {self.pairing_code} <file>\n")
+        print(f"   python sender.py {local_ip} {self.pairing_code} <file1> [file2] ...\n")
         print(f"📂 Save location: {self.save_dir.absolute()}")
         print(f"🌐 Listening on: {local_ip}:{self.port}")
         print(f"\n⏳ Waiting for connection...\n")
@@ -516,19 +548,19 @@ class SecureReceiver:
         conn = None
         try:
             conn, addr = server.accept()
-            conn.settimeout(300)  # 5 minute timeout
+            conn.settimeout(300)
             client_ip = addr[0]
             print(f"✓ Connection from: {client_ip}\n")
             
-            # Perform handshake with IP for rate limiting
+            # Perform handshake
             if not self.handshake(conn, client_ip):
                 print("✗ Handshake failed")
                 if conn:
                     conn.close()
                 return
             
-            # Receive file
-            success = self.receive_file(conn)
+            # Receive files
+            success = self.receive_files(conn)
             
             if success:
                 print("🎉 Transfer completed successfully!")
@@ -547,20 +579,6 @@ class SecureReceiver:
             if conn:
                 conn.close()
             server.close()
-            
-            # Clean up sensitive data
-            if self.session_keys:
-                for key_name, key_value in self.session_keys.items():
-                    if isinstance(key_value, (bytes, bytearray)):
-                        # Best effort to clear sensitive data
-                        try:
-                            # Convert to bytearray and zero it
-                            if isinstance(key_value, bytes):
-                                key_value = bytearray(key_value)
-                            for i in range(len(key_value)):
-                                key_value[i] = 0
-                        except:
-                            pass  # Can't do much in Python
 
 if __name__ == "__main__":
     import sys

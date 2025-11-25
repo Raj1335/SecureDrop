@@ -1,10 +1,7 @@
 """
 Protocol message types, framing, and constants.
 Implements wire-format specification for SecureDrop v1.0
-
-SECURITY FIXES:
-- Added validation in pack methods to enforce size limits
-- Prevents protocol violations at pack time, not just unpack time
+UPDATED: Added multi-file transfer support
 """
 
 import struct
@@ -15,10 +12,11 @@ PROTOCOL_VERSION_MAJOR = 0x01
 PROTOCOL_VERSION_MINOR = 0x00
 
 # Maximum message sizes for DoS protection
-MAX_FILENAME_LENGTH = 4096  # 4KB max filename
-MAX_PAKE_PAYLOAD = 8192     # 8KB max PAKE message
-MAX_CHUNK_SIZE = 1048576    # 1MB max chunk (ciphertext with tag)
-MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB max file size
+MAX_FILENAME_LENGTH = 4096
+MAX_PAKE_PAYLOAD = 8192
+MAX_CHUNK_SIZE = 1048576
+MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024
+MAX_FILE_LIST_SIZE = 10000  # Maximum files per transfer
 
 class MessageType(IntEnum):
     """Message type identifiers (1 byte)"""
@@ -33,6 +31,9 @@ class MessageType(IntEnum):
     FILE_CHUNK = 0x11
     FILE_END = 0x12
     TRANSFER_RESULT = 0x13
+    FILE_LIST = 0x14        # NEW: List of files to transfer
+    FILE_LIST_ACK = 0x15    # NEW: Acknowledge file list
+    NEXT_FILE = 0x16        # NEW: Ready for next file
     ERROR = 0xFF
 
 class ErrorCode(IntEnum):
@@ -54,19 +55,10 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_hello(version_major, version_minor, nonce):
-        """
-        Pack HELLO message.
-        Format: [1B type][2B version][16B nonce]
-        """
+        """Pack HELLO message. Format: [1B type][2B version][16B nonce]"""
         if len(nonce) != 16:
             raise ValueError("Nonce must be 16 bytes")
-        return struct.pack(
-            '!BBB16s',
-            MessageType.HELLO,
-            version_major,
-            version_minor,
-            nonce
-        )
+        return struct.pack('!BBB16s', MessageType.HELLO, version_major, version_minor, nonce)
     
     @staticmethod
     def unpack_hello(data):
@@ -80,19 +72,10 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_hello_ack(version_major, version_minor, nonce):
-        """
-        Pack HELLO_ACK message.
-        Format: [1B type][2B version][16B nonce]
-        """
+        """Pack HELLO_ACK message. Format: [1B type][2B version][16B nonce]"""
         if len(nonce) != 16:
             raise ValueError("Nonce must be 16 bytes")
-        return struct.pack(
-            '!BBB16s',
-            MessageType.HELLO_ACK,
-            version_major,
-            version_minor,
-            nonce
-        )
+        return struct.pack('!BBB16s', MessageType.HELLO_ACK, version_major, version_minor, nonce)
     
     @staticmethod
     def unpack_hello_ack(data):
@@ -106,28 +89,14 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_pake_init(version_major, version_minor, pake_payload):
-        """
-        Pack PAKE_INIT message.
-        Format: [1B type][2B version][2B len][payload]
-        
-        SECURITY FIX: Validates payload size before packing
-        """
+        """Pack PAKE_INIT message. Format: [1B type][2B version][2B len][payload]"""
         payload_len = len(pake_payload)
-        
-        # SECURITY FIX: Validate payload size
         if payload_len > MAX_PAKE_PAYLOAD:
             raise ValueError(f"PAKE payload too large: {payload_len} (max: {MAX_PAKE_PAYLOAD})")
         if payload_len == 0:
             raise ValueError("PAKE payload cannot be empty")
-        
-        return struct.pack(
-            f'!BBBH{payload_len}s',
-            MessageType.PAKE_INIT,
-            version_major,
-            version_minor,
-            payload_len,
-            pake_payload
-        )
+        return struct.pack(f'!BBBH{payload_len}s', MessageType.PAKE_INIT, version_major, 
+                          version_minor, payload_len, pake_payload)
     
     @staticmethod
     def unpack_pake_init(data):
@@ -146,28 +115,14 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_pake_reply(version_major, version_minor, pake_payload):
-        """
-        Pack PAKE_REPLY message.
-        Format: [1B type][2B version][2B len][payload]
-        
-        SECURITY FIX: Validates payload size before packing
-        """
+        """Pack PAKE_REPLY message. Format: [1B type][2B version][2B len][payload]"""
         payload_len = len(pake_payload)
-        
-        # SECURITY FIX: Validate payload size
         if payload_len > MAX_PAKE_PAYLOAD:
             raise ValueError(f"PAKE payload too large: {payload_len} (max: {MAX_PAKE_PAYLOAD})")
         if payload_len == 0:
             raise ValueError("PAKE payload cannot be empty")
-        
-        return struct.pack(
-            f'!BBBH{payload_len}s',
-            MessageType.PAKE_REPLY,
-            version_major,
-            version_minor,
-            payload_len,
-            pake_payload
-        )
+        return struct.pack(f'!BBBH{payload_len}s', MessageType.PAKE_REPLY, version_major,
+                          version_minor, payload_len, pake_payload)
     
     @staticmethod
     def unpack_pake_reply(data):
@@ -186,20 +141,11 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_dh_pub(version_major, version_minor, role_id, public_key):
-        """
-        Pack DH_PUB message.
-        Format: [1B type][2B version][1B role][32B pubkey]
-        """
+        """Pack DH_PUB message. Format: [1B type][2B version][1B role][32B pubkey]"""
         if len(public_key) != 32:
             raise ValueError("X25519 public key must be 32 bytes")
-        return struct.pack(
-            '!BBBB32s',
-            MessageType.DH_PUB,
-            version_major,
-            version_minor,
-            role_id,
-            public_key
-        )
+        return struct.pack('!BBBB32s', MessageType.DH_PUB, version_major, version_minor,
+                          role_id, public_key)
     
     @staticmethod
     def unpack_dh_pub(data):
@@ -213,19 +159,10 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_kconfirm(version_major, version_minor, mac):
-        """
-        Pack KCONFIRM message.
-        Format: [1B type][2B version][16B mac]
-        """
+        """Pack KCONFIRM message. Format: [1B type][2B version][16B mac]"""
         if len(mac) != 16:
             raise ValueError("MAC must be 16 bytes")
-        return struct.pack(
-            '!BBB16s',
-            MessageType.KCONFIRM,
-            version_major,
-            version_minor,
-            mac
-        )
+        return struct.pack('!BBB16s', MessageType.KCONFIRM, version_major, version_minor, mac)
     
     @staticmethod
     def unpack_kconfirm(data):
@@ -242,13 +179,7 @@ class ProtocolMessage:
         """Pack KCONFIRM_ACK message"""
         if len(mac) != 16:
             raise ValueError("MAC must be 16 bytes")
-        return struct.pack(
-            '!BBB16s',
-            MessageType.KCONFIRM_ACK,
-            version_major,
-            version_minor,
-            mac
-        )
+        return struct.pack('!BBB16s', MessageType.KCONFIRM_ACK, version_major, version_minor, mac)
     
     @staticmethod
     def unpack_kconfirm_ack(data):
@@ -261,39 +192,116 @@ class ProtocolMessage:
         return major, minor, mac
     
     @staticmethod
-    def pack_file_meta(version_major, version_minor, filename, file_size):
+    def pack_file_list(version_major, version_minor, file_entries):
         """
-        Pack FILE_META message.
-        Format: [1B type][2B version][2B filename_len][filename][8B size]
+        Pack FILE_LIST message.
+        Format: [1B type][2B version][4B count][entries]
+        Entry: [2B name_len][name][8B size]
+        """
+        file_count = len(file_entries)
+        if file_count > MAX_FILE_LIST_SIZE:
+            raise ValueError(f"Too many files: {file_count} (max: {MAX_FILE_LIST_SIZE})")
+        if file_count == 0:
+            raise ValueError("File list cannot be empty")
         
-        SECURITY FIX: Validates filename length and file size before packing
-        """
+        data = struct.pack('!BBBI', MessageType.FILE_LIST, version_major, version_minor, file_count)
+        
+        for filename, size in file_entries:
+            name_bytes = filename.encode('utf-8')
+            name_len = len(name_bytes)
+            if name_len > MAX_FILENAME_LENGTH:
+                raise ValueError(f"Filename too long: {name_len}")
+            if size > MAX_FILE_SIZE:
+                raise ValueError(f"File too large: {size}")
+            data += struct.pack(f'!H{name_len}sQ', name_len, name_bytes, size)
+        
+        return data
+    
+    @staticmethod
+    def unpack_file_list(data):
+        """Unpack FILE_LIST, return (major, minor, file_entries)"""
+        if len(data) < 7:
+            raise ValueError("FILE_LIST message too short")
+        msg_type, major, minor, count = struct.unpack('!BBBI', data[:7])
+        if msg_type != MessageType.FILE_LIST:
+            raise ValueError(f"Expected FILE_LIST, got {msg_type}")
+        if count > MAX_FILE_LIST_SIZE:
+            raise ValueError(f"Too many files: {count}")
+        
+        entries = []
+        offset = 7
+        for _ in range(count):
+            if offset + 2 > len(data):
+                raise ValueError("FILE_LIST entry incomplete")
+            name_len = struct.unpack('!H', data[offset:offset+2])[0]
+            offset += 2
+            
+            if name_len > MAX_FILENAME_LENGTH:
+                raise ValueError(f"Filename too long: {name_len}")
+            if offset + name_len + 8 > len(data):
+                raise ValueError("FILE_LIST entry incomplete")
+            
+            name_bytes = data[offset:offset+name_len]
+            offset += name_len
+            size = struct.unpack('!Q', data[offset:offset+8])[0]
+            offset += 8
+            
+            if size > MAX_FILE_SIZE:
+                raise ValueError(f"File size too large: {size}")
+            
+            entries.append((name_bytes.decode('utf-8'), size))
+        
+        return major, minor, entries
+    
+    @staticmethod
+    def pack_file_list_ack(version_major, version_minor):
+        """Pack FILE_LIST_ACK message. Format: [1B type][2B version][1B status]"""
+        return struct.pack('!BBBB', MessageType.FILE_LIST_ACK, version_major, version_minor, 0x01)
+    
+    @staticmethod
+    def unpack_file_list_ack(data):
+        """Unpack FILE_LIST_ACK, return (major, minor, status)"""
+        if len(data) < 4:
+            raise ValueError("FILE_LIST_ACK message too short")
+        msg_type, major, minor, status = struct.unpack('!BBBB', data[:4])
+        if msg_type != MessageType.FILE_LIST_ACK:
+            raise ValueError(f"Expected FILE_LIST_ACK, got {msg_type}")
+        return major, minor, status
+    
+    @staticmethod
+    def pack_next_file(version_major, version_minor, file_index):
+        """Pack NEXT_FILE message. Format: [1B type][2B version][4B index]"""
+        return struct.pack('!BBBI', MessageType.NEXT_FILE, version_major, version_minor, file_index)
+    
+    @staticmethod
+    def unpack_next_file(data):
+        """Unpack NEXT_FILE, return (major, minor, file_index)"""
+        if len(data) < 7:
+            raise ValueError("NEXT_FILE message too short")
+        msg_type, major, minor, file_index = struct.unpack('!BBBI', data[:7])
+        if msg_type != MessageType.NEXT_FILE:
+            raise ValueError(f"Expected NEXT_FILE, got {msg_type}")
+        return major, minor, file_index
+    
+    @staticmethod
+    def pack_file_meta(version_major, version_minor, filename, file_size):
+        """Pack FILE_META message. Format: [1B type][2B version][2B filename_len][filename][8B size]"""
         filename_bytes = filename.encode('utf-8')
         filename_len = len(filename_bytes)
         
-        # SECURITY FIX: Validate filename length
         if filename_len > MAX_FILENAME_LENGTH:
             raise ValueError(f"Filename too long: {filename_len} (max: {MAX_FILENAME_LENGTH})")
         if filename_len > 65535:
             raise ValueError("Filename too long for protocol (max 65535 bytes)")
         if filename_len == 0:
             raise ValueError("Filename cannot be empty")
-        
-        # SECURITY FIX: Validate file size
         if file_size > MAX_FILE_SIZE:
             raise ValueError(f"File too large: {file_size} (max: {MAX_FILE_SIZE})")
         if file_size == 0:
             raise ValueError("File size cannot be zero")
         
-        return struct.pack(
-            f'!BBBH{filename_len}sQ',
-            MessageType.FILE_META,
-            version_major,
-            version_minor,
-            filename_len,
-            filename_bytes,
-            file_size
-        )
+        return struct.pack(f'!BBBH{filename_len}sQ', MessageType.FILE_META, version_major,
+                          version_minor, filename_len, filename_bytes, file_size)
     
     @staticmethod
     def unpack_file_meta(data):
@@ -303,8 +311,6 @@ class ProtocolMessage:
         msg_type, major, minor, filename_len = struct.unpack('!BBBH', data[:5])
         if msg_type != MessageType.FILE_META:
             raise ValueError(f"Expected FILE_META, got {msg_type}")
-        
-        # Validate filename length
         if filename_len > MAX_FILENAME_LENGTH:
             raise ValueError(f"Filename too long: {filename_len}")
         if len(data) < 5 + filename_len + 8:
@@ -312,10 +318,8 @@ class ProtocolMessage:
         
         filename_bytes = data[5:5+filename_len]
         filename = filename_bytes.decode('utf-8')
-        
         file_size = struct.unpack('!Q', data[5+filename_len:5+filename_len+8])[0]
         
-        # Validate file size
         if file_size > MAX_FILE_SIZE:
             raise ValueError(f"File size too large: {file_size}")
         if file_size == 0:
@@ -325,15 +329,9 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_file_chunk(version_major, version_minor, sequence, ciphertext):
-        """
-        Pack FILE_CHUNK message.
-        Format: [1B type][2B version][8B seq][2B ctlen][ciphertext+tag]
-        
-        SECURITY FIX: Validates ciphertext size before packing
-        """
+        """Pack FILE_CHUNK message. Format: [1B type][2B version][8B seq][2B ctlen][ciphertext+tag]"""
         ct_len = len(ciphertext)
         
-        # SECURITY FIX: Validate ciphertext length
         if ct_len > MAX_CHUNK_SIZE:
             raise ValueError(f"Chunk too large: {ct_len} (max: {MAX_CHUNK_SIZE})")
         if ct_len == 0:
@@ -341,15 +339,8 @@ class ProtocolMessage:
         if ct_len > 65535:
             raise ValueError("Ciphertext too large for protocol (max 65535 bytes)")
         
-        return struct.pack(
-            f'!BBBQH{ct_len}s',
-            MessageType.FILE_CHUNK,
-            version_major,
-            version_minor,
-            sequence,
-            ct_len,
-            ciphertext
-        )
+        return struct.pack(f'!BBBQH{ct_len}s', MessageType.FILE_CHUNK, version_major,
+                          version_minor, sequence, ct_len, ciphertext)
     
     @staticmethod
     def unpack_file_chunk(data):
@@ -359,8 +350,6 @@ class ProtocolMessage:
         msg_type, major, minor, sequence, ct_len = struct.unpack('!BBBQH', data[:13])
         if msg_type != MessageType.FILE_CHUNK:
             raise ValueError(f"Expected FILE_CHUNK, got {msg_type}")
-        
-        # SECURITY FIX: Validate chunk size
         if ct_len > MAX_CHUNK_SIZE:
             raise ValueError(f"Chunk size too large: {ct_len}")
         if ct_len == 0:
@@ -373,21 +362,11 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_file_end(version_major, version_minor, final_seq, file_hash):
-        """
-        Pack FILE_END message.
-        Format: [1B type][2B version][8B final_seq][32B hash]
-        """
+        """Pack FILE_END message. Format: [1B type][2B version][8B final_seq][32B hash]"""
         if len(file_hash) != 32:
             raise ValueError("File hash must be 32 bytes (SHA-256)")
-        
-        return struct.pack(
-            '!BBBQ32s',
-            MessageType.FILE_END,
-            version_major,
-            version_minor,
-            final_seq,
-            file_hash
-        )
+        return struct.pack('!BBBQ32s', MessageType.FILE_END, version_major, version_minor,
+                          final_seq, file_hash)
     
     @staticmethod
     def unpack_file_end(data):
@@ -401,18 +380,9 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_transfer_result(version_major, version_minor, success):
-        """
-        Pack TRANSFER_RESULT message.
-        Format: [1B type][2B version][1B result]
-        """
+        """Pack TRANSFER_RESULT message. Format: [1B type][2B version][1B result]"""
         result_code = 0x01 if success else 0x00
-        return struct.pack(
-            '!BBBB',
-            MessageType.TRANSFER_RESULT,
-            version_major,
-            version_minor,
-            result_code
-        )
+        return struct.pack('!BBBB', MessageType.TRANSFER_RESULT, version_major, version_minor, result_code)
     
     @staticmethod
     def unpack_transfer_result(data):
@@ -426,17 +396,8 @@ class ProtocolMessage:
     
     @staticmethod
     def pack_error(version_major, version_minor, error_code):
-        """
-        Pack ERROR message.
-        Format: [1B type][2B version][1B error_code]
-        """
-        return struct.pack(
-            '!BBBB',
-            MessageType.ERROR,
-            version_major,
-            version_minor,
-            error_code
-        )
+        """Pack ERROR message. Format: [1B type][2B version][1B error_code]"""
+        return struct.pack('!BBBB', MessageType.ERROR, version_major, version_minor, error_code)
     
     @staticmethod
     def unpack_error(data):
@@ -448,7 +409,6 @@ class ProtocolMessage:
             raise ValueError(f"Expected ERROR, got {msg_type}")
         return major, minor, error_code
 
-# Helper functions
 def generate_nonce():
     """Generate cryptographically secure 16-byte nonce"""
     import os
@@ -458,5 +418,4 @@ def check_version_compatible(their_major, their_minor):
     """Check if peer's version is compatible with ours"""
     if their_major != PROTOCOL_VERSION_MAJOR:
         return False
-    # Minor version differences are acceptable
     return True
