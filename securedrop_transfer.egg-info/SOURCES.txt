@@ -1,0 +1,11 @@
+setup.py
+securedrop/__init__.py
+securedrop/cli.py
+securedrop/receiver_module.py
+securedrop/sender_module.py
+securedrop_transfer.egg-info/PKG-INFO
+securedrop_transfer.egg-info/SOURCES.txt
+securedrop_transfer.egg-info/dependency_links.txt
+securedrop_transfer.egg-info/entry_points.txt
+securedrop_transfer.egg-info/requires.txt
+securedrop_transfer.egg-info/top_level.txt

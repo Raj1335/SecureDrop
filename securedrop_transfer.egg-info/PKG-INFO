@@ -1,0 +1,46 @@
+Metadata-Version: 2.4
+Name: securedrop-transfer
+Version: 1.0.0
+Summary: Enterprise-grade cryptographic protocol for secure P2P file transfer
+Home-page: https://github.com/yourusername/securedrop
+Author: Your Name
+Author-email: your.email@example.com
+Project-URL: Bug Reports, https://github.com/yourusername/securedrop/issues
+Project-URL: Source, https://github.com/yourusername/securedrop
+Project-URL: Documentation, https://github.com/yourusername/securedrop#readme
+Keywords: security cryptography file-transfer p2p encryption spake2 x25519
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: Topic :: Security :: Cryptography
+Classifier: Topic :: Communications :: File Sharing
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: cryptography>=41.0.0
+Requires-Dist: spake2>=0.8
+Requires-Dist: click>=8.1.0
+Requires-Dist: rich>=13.0.0
+Requires-Dist: prompt-toolkit>=3.0.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: flake8>=6.0.0; extra == "dev"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: project-url
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

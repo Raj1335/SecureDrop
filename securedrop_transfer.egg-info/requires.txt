@@ -1,0 +1,10 @@
+cryptography>=41.0.0
+spake2>=0.8
+click>=8.1.0
+rich>=13.0.0
+prompt-toolkit>=3.0.0
+
+[dev]
+pytest>=7.0.0
+black>=23.0.0
+flake8>=6.0.0
